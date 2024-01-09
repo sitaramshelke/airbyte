@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List
 
 import anyio
 import asyncer
@@ -25,9 +25,12 @@ if TYPE_CHECKING:
     from pipelines.airbyte_ci.format.format_command import FormatCommand
     from pipelines.models.contexts.pipeline_context import PipelineContext
 
+
 from abc import ABC
 
 from rich.style import Style
+
+STEP_PARAMS = Dict[str, List[str]]
 
 
 @dataclass
@@ -155,14 +158,34 @@ class Step(ABC):
     # The max duration of a step run. If the step run for more than this duration it will be considered as timed out.
     # The default of 5 hours is arbitrary and can be changed if needed.
     max_duration: ClassVar[timedelta] = timedelta(hours=5)
-
     retry_delay = timedelta(seconds=10)
 
-    def __init__(self, context: PipelineContext) -> None:  # noqa D107
+    def __init__(self, context: PipelineContext, extra_params: Optional[STEP_PARAMS] = None) -> None:  # noqa D107
         self.context = context
         self.retry_count = 0
         self.started_at: Optional[datetime] = None
         self.stopped_at: Optional[datetime] = None
+        self.extra_params = extra_params or {}
+
+    @property
+    def default_params(self) -> STEP_PARAMS:
+        return {}
+
+    @property
+    def params(self) -> STEP_PARAMS:
+        return self.extra_params | self.default_params
+
+    @property
+    def params_as_cli_options(self) -> List[str]:
+        options: List[str] = []
+        for option_name, option_values in self.params.items():
+            for option_value in option_values:
+                if option_name.startswith("--"):
+                    options.append(f"{option_name}={option_value}")
+                else:
+                    options.append(option_name)
+                    options.append(option_value)
+        return options
 
     @property
     def title(self) -> str:

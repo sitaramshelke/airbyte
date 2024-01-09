@@ -3,7 +3,7 @@
 #
 
 from abc import ABC
-from typing import Any, ClassVar, List
+from typing import Any, ClassVar, Dict, List
 
 import pipelines.dagger.actions.system.docker
 from dagger import CacheSharingMode, CacheVolume
@@ -11,7 +11,7 @@ from pipelines.airbyte_ci.connectors.context import ConnectorContext
 from pipelines.consts import AMAZONCORRETTO_IMAGE
 from pipelines.dagger.actions import secrets
 from pipelines.helpers.utils import sh_dash_c
-from pipelines.models.steps import Step, StepResult
+from pipelines.models.steps import STEP_PARAMS, Step, StepResult
 
 
 class GradleTask(Step, ABC):
@@ -27,7 +27,6 @@ class GradleTask(Step, ABC):
 
     context: ConnectorContext
 
-    DEFAULT_GRADLE_TASK_OPTIONS = ("--no-daemon", "--no-watch-fs", "--scan", "--build-cache", "--console=plain")
     LOCAL_MAVEN_REPOSITORY_PATH = "/root/.m2"
     GRADLE_DEP_CACHE_PATH = "/root/gradle-cache"
     GRADLE_HOME_PATH = "/root/.gradle"
@@ -35,6 +34,16 @@ class GradleTask(Step, ABC):
     gradle_task_name: ClassVar[str]
     bind_to_docker_host: ClassVar[bool] = False
     mount_connector_secrets: ClassVar[bool] = False
+
+    @property
+    def default_params(self) -> STEP_PARAMS:
+        return super().default_params | {
+            "--no-daemon": [],  # Disable Gradle daemon.
+            "--no-watch-fs": [],  # Disable Gradle file system watching.
+            "--scan": [],  # Enable Gradle build scan.
+            "--build-cache": [],  # Enable Gradle build cache.
+            "--console": ["plain"],  # Disable Gradle rich console.
+        }
 
     @property
     def dependency_cache_volume(self) -> CacheVolume:
@@ -56,7 +65,7 @@ class GradleTask(Step, ABC):
         ]
 
     def _get_gradle_command(self, task: str, *args: Any) -> str:
-        return f"./gradlew {' '.join(self.DEFAULT_GRADLE_TASK_OPTIONS + args)} {task}"
+        return f"./gradlew {' '.join(self.params_as_cli_options + list(args))} {task}"
 
     async def _run(self, *args: Any, **kwargs: Any) -> StepResult:
         include = [
