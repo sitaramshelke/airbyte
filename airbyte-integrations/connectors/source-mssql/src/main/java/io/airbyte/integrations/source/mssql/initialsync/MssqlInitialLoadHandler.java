@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2023 Airbyte, Inc., all rights reserved.
+ */
+
 package io.airbyte.integrations.source.mssql.initialsync;
 
 import static io.airbyte.cdk.integrations.debezium.DebeziumIteratorConstants.SYNC_CHECKPOINT_DURATION_PROPERTY;
@@ -31,12 +35,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class MssqlInitialLoadHandler {
+
   private static final Logger LOGGER = LoggerFactory.getLogger(MssqlInitialLoadHandler.class);
   private static final long RECORD_LOGGING_SAMPLE_RATE = 1_000_000;
   private final JsonNode config;
@@ -65,10 +69,11 @@ public class MssqlInitialLoadHandler {
     this.streamStateForIncrementalRunSupplier = streamStateForIncrementalRunSupplier;
     this.tableSizeInfoMap = tableSizeInfoMap;
   }
+
   public List<AutoCloseableIterator<AirbyteMessage>> getIncrementalIterators(
-      final ConfiguredAirbyteCatalog catalog,
-      final Map<String, TableInfo<CommonField<JDBCType>>> tableNameToTable,
-      final Instant emittedAt) {
+                                                                             final ConfiguredAirbyteCatalog catalog,
+                                                                             final Map<String, TableInfo<CommonField<JDBCType>>> tableNameToTable,
+                                                                             final Instant emittedAt) {
     final List<AutoCloseableIterator<AirbyteMessage>> iteratorList = new ArrayList<>();
     for (final ConfiguredAirbyteStream airbyteStream : catalog.getStreams()) {
       final AirbyteStream stream = airbyteStream.getStream();
@@ -109,10 +114,10 @@ public class MssqlInitialLoadHandler {
 
   // Transforms the given iterator to create an {@link AirbyteRecordMessage}
   private AutoCloseableIterator<AirbyteMessage> getRecordIterator(
-      final AutoCloseableIterator<JsonNode> recordIterator,
-      final String streamName,
-      final String namespace,
-      final long emittedAt) {
+                                                                  final AutoCloseableIterator<JsonNode> recordIterator,
+                                                                  final String streamName,
+                                                                  final String namespace,
+                                                                  final long emittedAt) {
     return AutoCloseableIterators.transform(recordIterator, r -> new AirbyteMessage()
         .withType(Type.RECORD)
         .withRecord(new AirbyteRecordMessage()
@@ -124,8 +129,8 @@ public class MssqlInitialLoadHandler {
 
   // Augments the given iterator with record count logs.
   private AutoCloseableIterator<AirbyteMessage> augmentWithLogs(final AutoCloseableIterator<AirbyteMessage> iterator,
-      final io.airbyte.protocol.models.AirbyteStreamNameNamespacePair pair,
-      final String streamName) {
+                                                                final io.airbyte.protocol.models.AirbyteStreamNameNamespacePair pair,
+                                                                final String streamName) {
     final AtomicLong recordCount = new AtomicLong();
     return AutoCloseableIterators.transform(iterator,
         AirbyteStreamUtils.convertFromNameAndNamespace(pair.getName(), pair.getNamespace()),
@@ -139,11 +144,11 @@ public class MssqlInitialLoadHandler {
   }
 
   private AutoCloseableIterator<AirbyteMessage> augmentWithState(final AutoCloseableIterator<AirbyteMessage> recordIterator,
-      final AirbyteStreamNameNamespacePair pair) {
+                                                                 final AirbyteStreamNameNamespacePair pair) {
     final OrderedColumnLoadStatus currentOcLoadStatus = initialLoadStateManager.getOrderedColumnLoadStatus(pair);
     final JsonNode incrementalState =
         (currentOcLoadStatus == null || currentOcLoadStatus.getIncrementalState() == null) ? streamStateForIncrementalRunSupplier.apply(pair)
-            :currentOcLoadStatus.getIncrementalState();
+            : currentOcLoadStatus.getIncrementalState();
 
     final Duration syncCheckpointDuration =
         config.get(SYNC_CHECKPOINT_DURATION_PROPERTY) != null ? Duration.ofSeconds(config.get(SYNC_CHECKPOINT_DURATION_PROPERTY).asLong())
@@ -171,4 +176,5 @@ public class MssqlInitialLoadHandler {
     LOGGER.info("Chunk size determined for pair: {}, is {}", pair, chunkSize);
     return chunkSize;
   }
+
 }

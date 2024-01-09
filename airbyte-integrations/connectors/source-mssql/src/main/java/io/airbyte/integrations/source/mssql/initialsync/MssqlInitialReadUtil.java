@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2023 Airbyte, Inc., all rights reserved.
+ */
+
 package io.airbyte.integrations.source.mssql.initialsync;
 
 import static io.airbyte.integrations.source.mssql.MssqlCdcHelper.getDebeziumProperties;
@@ -20,6 +24,7 @@ import io.airbyte.cdk.integrations.source.relationaldb.CdcStateManager;
 import io.airbyte.cdk.integrations.source.relationaldb.DbSourceDiscoverUtil;
 import io.airbyte.cdk.integrations.source.relationaldb.TableInfo;
 import io.airbyte.cdk.integrations.source.relationaldb.models.CdcState;
+import io.airbyte.cdk.integrations.source.relationaldb.models.CursorBasedStatus;
 import io.airbyte.cdk.integrations.source.relationaldb.models.OrderedColumnLoadStatus;
 import io.airbyte.cdk.integrations.source.relationaldb.state.StateManager;
 import io.airbyte.commons.json.Jsons;
@@ -34,6 +39,7 @@ import io.airbyte.protocol.models.CommonField;
 import io.airbyte.protocol.models.v0.AirbyteMessage;
 import io.airbyte.protocol.models.v0.AirbyteStateMessage;
 import io.airbyte.protocol.models.v0.AirbyteStreamNameNamespacePair;
+import io.airbyte.protocol.models.v0.AirbyteStreamState;
 import io.airbyte.protocol.models.v0.ConfiguredAirbyteCatalog;
 import io.airbyte.protocol.models.v0.ConfiguredAirbyteStream;
 import io.airbyte.protocol.models.v0.StreamDescriptor;
@@ -58,6 +64,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class MssqlInitialReadUtil {
+
   private static final Logger LOGGER = LoggerFactory.getLogger(MssqlInitialReadUtil.class);
 
   public record InitialLoadStreams(List<ConfiguredAirbyteStream> streamsForInitialLoad,
@@ -65,14 +72,19 @@ public class MssqlInitialReadUtil {
 
   }
 
+  public record CursorBasedStreams(List<ConfiguredAirbyteStream> streamsForCursorBased,
+                                   Map<AirbyteStreamNameNamespacePair, CursorBasedStatus> pairToCursorBasedStatus) {
+
+  }
+
   public record OrderedColumnInfo(String ocFieldName, JDBCType fieldType, String ocMaxValue) {}
 
   public static List<AutoCloseableIterator<AirbyteMessage>> getCdcReadIterators(final JdbcDatabase database,
-      final ConfiguredAirbyteCatalog catalog,
-      final Map<String, TableInfo<CommonField<JDBCType>>> tableNameToTable,
-      final StateManager stateManager,
-      final Instant emittedAt,
-      final String quoteString) {
+                                                                                final ConfiguredAirbyteCatalog catalog,
+                                                                                final Map<String, TableInfo<CommonField<JDBCType>>> tableNameToTable,
+                                                                                final StateManager stateManager,
+                                                                                final Instant emittedAt,
+                                                                                final String quoteString) {
     final JsonNode sourceConfig = database.getSourceConfig();
     final Duration firstRecordWaitTime = RecordWaitTimeUtil.getFirstRecordWaitTime(sourceConfig);
     final Duration subsequentRecordWaitTime = RecordWaitTimeUtil.getSubsequentRecordWaitTime(sourceConfig);
@@ -91,23 +103,25 @@ public class MssqlInitialReadUtil {
             ? initialDebeziumState
             : Jsons.clone(stateManager.getCdcStateManager().getCdcState().getState());
 
-/*
-    final Optional<MysqlDebeziumStateAttributes> savedOffset = mySqlDebeziumStateUtil.savedOffset(
-        MySqlCdcProperties.getDebeziumProperties(database), catalog, state.get(MYSQL_CDC_OFFSET), sourceConfig);
-
-    final boolean savedOffsetStillPresentOnServer =
-        savedOffset.isPresent() && mySqlDebeziumStateUtil.savedOffsetStillPresentOnServer(database, savedOffset.get());
-
-    if (!savedOffsetStillPresentOnServer) {
-      LOGGER.warn("Saved offset no longer present on the server, Airbyte is going to trigger a sync from scratch");
-    }
-
-*/
+    /*
+     * final Optional<MysqlDebeziumStateAttributes> savedOffset = mySqlDebeziumStateUtil.savedOffset(
+     * MySqlCdcProperties.getDebeziumProperties(database), catalog, state.get(MYSQL_CDC_OFFSET),
+     * sourceConfig);
+     *
+     * final boolean savedOffsetStillPresentOnServer = savedOffset.isPresent() &&
+     * mySqlDebeziumStateUtil.savedOffsetStillPresentOnServer(database, savedOffset.get());
+     *
+     * if (!savedOffsetStillPresentOnServer) { LOGGER.
+     * warn("Saved offset no longer present on the server, Airbyte is going to trigger a sync from scratch"
+     * ); }
+     *
+     */
     final boolean savedOffsetStillPresentOnServer = true; // TEMP
-    final InitialLoadStreams initialLoadStreams = cdcStreamsForInitialOrderedCoumnLoad(stateManager.getCdcStateManager(), catalog, savedOffsetStillPresentOnServer);
+    final InitialLoadStreams initialLoadStreams =
+        cdcStreamsForInitialOrderedCoumnLoad(stateManager.getCdcStateManager(), catalog, savedOffsetStillPresentOnServer);
     final CdcState stateToBeUsed = (!savedOffsetStillPresentOnServer || (stateManager.getCdcStateManager().getCdcState() == null
         || stateManager.getCdcStateManager().getCdcState().getState() == null)) ? new CdcState().withState(initialDebeziumState)
-        : stateManager.getCdcStateManager().getCdcState();
+            : stateManager.getCdcStateManager().getCdcState();
 
     final MssqlCdcConnectorMetadataInjector mssqlCdcConnectorMetadataInjector = MssqlCdcConnectorMetadataInjector.getInstance(emittedAt);
     // If there are streams to sync via ordered column load, build the relevant iterators.
@@ -266,5 +280,55 @@ public class MssqlInitialReadUtil {
         .filter(stream -> newlyAddedStreams.contains(AirbyteStreamNameNamespacePair.fromAirbyteStream(stream.getStream())))
         .map(Jsons::clone)
         .collect(Collectors.toList());
+  }
+
+  public static InitialLoadStreams streamsForInitialOrderedColumnLoad(final StateManager stateManager,
+                                                                      final ConfiguredAirbyteCatalog fullCatalog) {
+
+    final List<AirbyteStateMessage> rawStateMessages = stateManager.getRawStateMessages();
+    final Set<AirbyteStreamNameNamespacePair> streamsStillInOrderedColumnSync = new HashSet<>();
+    final Set<AirbyteStreamNameNamespacePair> alreadySeenStreamPairs = new HashSet<>();
+
+    // Build a map of stream <-> initial load status for streams that currently have an initial primary
+    // key load in progress.
+    final Map<AirbyteStreamNameNamespacePair, OrderedColumnLoadStatus> pairToInitialLoadStatus = new HashMap<>();
+
+    if (rawStateMessages != null) {
+      rawStateMessages.forEach(stateMessage -> {
+        final AirbyteStreamState stream = stateMessage.getStream();
+        final JsonNode streamState = stream.getStreamState();
+        final StreamDescriptor streamDescriptor = stateMessage.getStream().getStreamDescriptor();
+        if (streamState == null || streamDescriptor == null) {
+          return;
+        }
+
+        final AirbyteStreamNameNamespacePair pair = new AirbyteStreamNameNamespacePair(streamDescriptor.getName(),
+            streamDescriptor.getNamespace());
+
+        // Build a map of stream <-> initial load status for streams that currently have an initial primary
+        // key load in progress.
+
+        if (streamState.has(STATE_TYPE_KEY)) {
+          if (streamState.get(STATE_TYPE_KEY).asText().equalsIgnoreCase(ORDERED_COL_STATE_TYPE)) {
+            final OrderedColumnLoadStatus orderedColumnLoadStatus = Jsons.object(streamState, OrderedColumnLoadStatus.class);
+            pairToInitialLoadStatus.put(pair, orderedColumnLoadStatus);
+            streamsStillInOrderedColumnSync.add(pair);
+          }
+        }
+        alreadySeenStreamPairs.add(new AirbyteStreamNameNamespacePair(streamDescriptor.getName(), streamDescriptor.getNamespace()));
+      });
+    }
+    final List<ConfiguredAirbyteStream> streamsForPkSync = new ArrayList<>();
+    fullCatalog.getStreams().stream()
+        .filter(stream -> streamsStillInOrderedColumnSync.contains(AirbyteStreamNameNamespacePair.fromAirbyteStream(stream.getStream())))
+        .map(Jsons::clone)
+        .forEach(streamsForPkSync::add);
+
+    final List<ConfiguredAirbyteStream> newlyAddedStreams = identifyStreamsToSnapshot(fullCatalog,
+        Collections.unmodifiableSet(alreadySeenStreamPairs));
+    streamsForPkSync.addAll(newlyAddedStreams);
+    return new InitialLoadStreams(streamsForPkSync.stream().filter((stream) -> !stream.getStream().getSourceDefinedPrimaryKey()
+        .isEmpty()).collect(Collectors.toList()),
+        pairToInitialLoadStatus);
   }
 }

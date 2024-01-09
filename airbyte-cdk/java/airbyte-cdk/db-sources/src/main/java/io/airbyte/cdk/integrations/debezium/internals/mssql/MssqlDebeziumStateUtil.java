@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2023 Airbyte, Inc., all rights reserved.
+ */
+
 package io.airbyte.cdk.integrations.debezium.internals.mssql;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -9,15 +13,16 @@ import java.util.Properties;
 public class MssqlDebeziumStateUtil implements DebeziumStateUtil {
 
   public JsonNode constructInitialDebeziumState(final Properties properties,
-      final ConfiguredAirbyteCatalog catalog,
-      final JdbcDatabase database) {
+                                                final ConfiguredAirbyteCatalog catalog,
+                                                final JdbcDatabase database) {
     return null; // TEMP
   }
 
   public static MssqlDebeziumStateAttributes getStateAttributesFromDB(final JdbcDatabase database) {
     return new MssqlDebeziumStateAttributes(); // TEMP
   }
-  public record MssqlDebeziumStateAttributes() { //TODO: get attributes
+
+  public record MssqlDebeziumStateAttributes() { // TODO: get attributes
   }
 
 }
